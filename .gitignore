@@ -1,0 +1,21 @@
+# ROS build artifacts
+build/
+devel/
+logs/
+
+# ROS runtime
+.ros/
+
+# Python
+__pycache__/
+*.pyc
+
+# Experiment outputs
+results/
+*.bag
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store

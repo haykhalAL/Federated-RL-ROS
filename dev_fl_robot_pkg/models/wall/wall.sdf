@@ -1,0 +1,32 @@
+<sdf version="1.6">
+  <model name="wall">
+    <static>true</static>
+    <link name="link">
+      <collision name="collision">
+        <geometry>
+          <box>
+            <size>0.1 1 1</size> <!-- Adjust size as needed -->
+          </box>
+        </geometry>
+      </collision>
+      <visual name="visual">
+        <geometry>
+          <box>
+            <size>0.1 1 1</size> <!-- Adjust size as needed -->
+          </box>
+        </geometry>
+        <material>
+          <script>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+            <name>Gazebo/Gray</name>  <!-- Set material to a visible color -->
+          </script>
+          <ambient>0.7 0.7 0.7 1</ambient>  <!-- Set ambient color (gray) -->
+          <diffuse>0.7 0.7 0.7 1</diffuse>  <!-- Set diffuse color (gray) -->
+          <specular>0.5 0.5 0.5 1</specular>  <!-- Set specular color (gray) -->
+          <emissive>0 0 0 1</emissive>  <!-- Set emissive color (black) -->
+        </material>
+        <cast_shadows>true</cast_shadows>
+      </visual>
+    </link>
+  </model>
+</sdf>

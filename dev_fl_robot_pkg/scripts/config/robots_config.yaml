@@ -1,0 +1,24 @@
+experiment:
+  paradigm: random_start_fixed_goal
+  goal:
+    mode: random_per_run
+    radius: 0.3
+
+robots:
+  - name: robot1
+    deploy: true
+    spawn: [0.0, 0.0, 0.0] # robot position (x,y,yaw)
+    maze_spawn: [0.0, 0.0, 0.0] # maze position (x,y,yaw)
+    loggers: [odom, lidar, velocity]
+
+  # - name: robot2
+  #   deploy: true
+  #   spawn: [7.0, 0.0, 0.0]
+  #   maze_spawn: [7.0, 0.0, 0.0] # offset by 7 units → no wall overlap
+  #   loggers: [odom, lidar, velocity]
+
+  # - name: robot3
+  #   deploy: true
+  #   spawn: [0.0, 7.0, 0.0]
+  #   maze_spawn: [0.0, 7.0, 0.0]
+  #   loggers: [odom, lidar, velocity]

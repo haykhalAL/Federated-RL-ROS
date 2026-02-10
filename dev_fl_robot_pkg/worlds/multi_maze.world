@@ -1,0 +1,40 @@
+<sdf version="1.6">
+  <world name="default">
+    <include>
+      <uri>model://sun</uri>
+    </include>
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+    
+    <!-- Maze 1 -->
+    <include>
+      <uri>model://maze</uri>
+      <pose>0 0 0 0 0 0</pose> <!-- Position maze1 -->
+    </include>
+    <include>
+      <uri>model://turtlebot3</uri>
+      <pose>0 0 0.1 0 0 0</pose> <!-- Position robot1 -->
+    </include>
+    
+    <!-- Maze 2 -->
+    <include>
+      <uri>model://maze</uri>
+      <pose>10 10 0 0 0 0</pose> <!-- Position maze2 -->
+    </include>
+    <include>
+      <uri>model://turtlebot3</uri>
+      <pose>10 10 0.1 0 0 0</pose> <!-- Position robot2 -->
+    </include>
+    
+    <!-- Maze 3 -->
+    <include>
+      <uri>model://maze</uri>
+      <pose>20 20 0 0 0 0</pose> <!-- Position maze3 -->
+    </include>
+    <include>
+      <uri>model://turtlebot3</uri>
+      <pose>20 20 0.1 0 0 0</pose> <!-- Position robot3 -->
+    </include>
+  </world>
+</sdf>

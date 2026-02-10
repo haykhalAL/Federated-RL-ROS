@@ -1,0 +1,39 @@
+<sdf version="1.6">
+  <world name="default">
+    <include>
+      <uri>model://sun</uri>
+    </include>
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+
+    <gui>
+      <camera name="user_camera">
+        <pose>0 0 10 0 1.57 0</pose> <!-- Overhead view pose -->
+      </camera>
+    </gui>
+    
+    <model name="maze_1"> <!-- Unique name for Maze 1 -->
+      <include>
+        <uri>model://maze_6x6</uri>
+      </include>
+      <pose>0 0 0 0 0 0</pose>
+    </model>
+
+    <!-- Maze 2: Start at (10, 0), Finish at (15, 10) -->
+    <model name="maze_2"> <!-- Unique name for Maze 2 -->
+      <include>
+        <uri>model://maze_6x6</uri>
+      </include>
+      <pose>10 10 0 0 0 0</pose>
+    </model>
+
+    <!-- Maze 3: Start at (20, 10), Finish at (25, 20) -->
+    <model name="maze_3"> <!-- Unique name for Maze 3 -->
+      <include>
+        <uri>model://maze_6x6</uri>
+      </include>
+      <pose>20 20 0 0 0 0</pose>
+    </model>
+  </world>
+</sdf>
