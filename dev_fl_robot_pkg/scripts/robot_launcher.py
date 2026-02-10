@@ -9,7 +9,7 @@ import subprocess
 import xacro
 import random
 import math
-
+import rospkg
 
 MAZE_SIZE = 6        # meters
 CELL_SIZE = 1.0
@@ -20,8 +20,14 @@ CONFIG_PATH = os.path.join(
     "config",
     "robots_config.yaml"
 )
-URDF_XACRO_PATH = os.path.expanduser("~/federated-learning-ROS/src/dev_fl_robot_pkg/models/urdf/turtlebot3_burger.urdf.xacro")
-
+rospack = rospkg.RosPack()
+pkg_path = rospack.get_path("dev_fl_robot_pkg")
+URDF_XACRO_PATH = os.path.join(
+    pkg_path,
+    "models",
+    "urdf",
+    "turtlebot3_burger.urdf.xacro"
+)
 
 # Mapping between logger names in YAML and relative ROS topics
 LOGGER_TOPICS = {

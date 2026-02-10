@@ -4,13 +4,11 @@ import yaml
 import math
 import uuid
 
-# Path to robots config
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(
-    SCRIPT_DIR,
-    "config",
-    "robots_config.yaml"
+    os.path.dirname(__file__),
+    "../../config/robots_config.yaml"
 )
+CONFIG_PATH = os.path.abspath(CONFIG_PATH)
 
 # Terminator config
 TERMINATOR_CONFIG = os.path.expanduser("~/.config/terminator/config")
