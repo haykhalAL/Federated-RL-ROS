@@ -15,14 +15,19 @@ class ActorCritic(nn.Module):
             nn.ReLU(),
             nn.Linear(128, 128),
             nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
         )
 
-        self.actor = nn.Linear(128, action_dim)
+        self.actor_mean = nn.Linear(128, action_dim)   # action_dim = 2
+        self.actor_logstd = nn.Parameter(torch.zeros(action_dim))
         self.critic = nn.Linear(128, 1)
 
     def forward(self, x):
         x = self.shared(x)
-        return self.actor(x), self.critic(x)
+        mean = self.actor_mean(x)
+        value = self.critic(x)
+        return mean, value
 
 
 class PPOAgent:
@@ -49,13 +54,17 @@ class PPOAgent:
     def select_action(self, state):
         state_t = torch.FloatTensor(state).unsqueeze(0)
 
-        logits, value = self.net(state_t)
-        dist = Categorical(logits=logits)
+        mean, value = self.net(state_t)
+        std = torch.exp(self.net.actor_logstd)
 
+        dist = torch.distributions.Normal(mean, std)
         action = dist.sample()
-        log_prob = dist.log_prob(action)
 
-        return action.item(), log_prob.detach(), value.squeeze(0).detach()
+        log_prob = dist.log_prob(action).sum(dim=-1)
+
+        action_np = action.squeeze(0).detach().numpy()
+
+        return action_np, log_prob.detach(), value.squeeze(0).detach()
 
     def update(self):
 
@@ -68,26 +77,28 @@ class PPOAgent:
             returns.insert(0, G)
 
         states = torch.from_numpy(np.array(self.states, dtype=np.float32))
-        actions = torch.tensor(self.actions, dtype=torch.long)
+        actions = torch.tensor(self.actions, dtype=torch.float32)
         old_log_probs = torch.stack(self.log_probs).detach()
         returns = torch.tensor(returns, dtype=torch.float32)
         values = torch.stack(self.values).squeeze().detach()
 
         advantages = returns - values
         adv_std = advantages.std()
-        if adv_std < 1e-6:
-            advantages = advantages * 0.0
-        else:
-            advantages = (advantages - advantages.mean()) / (adv_std + 1e-8)
+        if len(advantages) < 2:
+            return  # not enough data to update safely
+        adv_std = advantages.std(unbiased=False) + 1e-8
+        advantages = (advantages - advantages.mean()) / adv_std
 
         # --- PPO epochs ---
         for _ in range(4):
 
-            logits, new_values = self.net(states)
-            dist = Categorical(logits=logits)
+            mean, new_values = self.net(states)
+            std = torch.exp(self.net.actor_logstd)
 
-            new_log_probs = dist.log_prob(actions)
-            entropy = dist.entropy().mean()
+            dist = torch.distributions.Normal(mean, std)
+
+            new_log_probs = dist.log_prob(actions).sum(dim=-1)
+            entropy = dist.entropy().sum(dim=-1).mean()
 
             ratio = torch.exp(new_log_probs - old_log_probs)
 
@@ -112,6 +123,18 @@ class PPOAgent:
         self.values.append(value)
         self.rewards.append(reward)
         self.dones.append(done)
+    
+    def save(self, path):
+        torch.save({
+            "model_state_dict": self.net.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict()
+        }, path)
+
+
+    def load(self, path):
+        checkpoint = torch.load(path, map_location="cpu")
+        self.net.load_state_dict(checkpoint["model_state_dict"])
+        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
 def build_ppo_state(env, goal,num_lidar_sectors):
     pose = env.controller.get_pose_state()

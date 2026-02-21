@@ -3,6 +3,7 @@ from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
 import math
+import numpy as np
 
 
 class RobotControllerClient:
@@ -46,13 +47,18 @@ class RobotControllerClient:
     # ------------------ Actions ------------------
 
     def step(self, action):
+        v, w = action
+
+        MAX_LIN = 0.25
+        MAX_ANG = 4.84
+
+        v = float(np.clip(v, -1, 1) * MAX_LIN)
+        w = float(np.clip(w, -1, 1) * MAX_ANG)
+
         twist = Twist()
-        if action == 0:
-            twist.linear.x = self.linear_speed
-        elif action == 1:
-            twist.angular.z = self.angular_speed
-        elif action == 2:
-            twist.angular.z = -self.angular_speed
+        twist.linear.x = v
+        twist.angular.z = w
+
         self.cmd_pub.publish(twist)
 
     # ------------------ Sensors ------------------

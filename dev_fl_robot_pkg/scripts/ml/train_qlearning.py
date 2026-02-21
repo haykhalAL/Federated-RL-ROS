@@ -36,7 +36,7 @@ CONFIG_PATH = os.path.join(
     "robots_config.yaml"
 )
 
-ACTION_DIM = 3
+ACTION_DIM = 2
 NUM_LIDAR_SECTORS = 24
 STATE_DIM = NUM_LIDAR_SECTORS + 3 
 
@@ -65,7 +65,6 @@ def main():
 
 
     rospy.loginfo("🚀 Q-learning training started")
-    ACTIONS = [0, 1, 2]  # forward, left, right
 
     agent = PPOAgent(
         state_dim=STATE_DIM,
@@ -81,34 +80,31 @@ def main():
         done = False
         total_reward = 0.0
 
-        state = build_ppo_state(env, env.goal_pose, NUM_LIDAR_SECTORS)
-        if state is None:
-            continue
+        state = None
+        while state is None and not rospy.is_shutdown():
+            state = build_ppo_state(env, env.goal_pose, NUM_LIDAR_SECTORS)
+            rospy.sleep(0.05)
 
         while not done and not rospy.is_shutdown():
             action, logp, value = agent.select_action(state)
             # print("action:", action, "logp:", logp, "value:", value.item())
-            obs, reward, done = env.step(action)
-            print("state",state)
-            if obs is None and not done:
-                rospy.logwarn("Step failed, retrying")
-                continue
+            _, reward, done = env.step(action)
+            # print("state",state)
+
+            next_state = None
+            while next_state is None and not rospy.is_shutdown():
+                next_state = build_ppo_state(env, env.goal_pose, NUM_LIDAR_SECTORS)
+                rospy.sleep(0.02)
 
             agent.store_transition(
                 state=state,
                 action=action,
                 log_prob=logp,
-                value=value,         
+                value=value,
                 reward=reward,
                 done=done
             )
             
-            next_state = build_ppo_state(env, env.goal_pose,NUM_LIDAR_SECTORS)
-
-            if next_state is None:
-                rospy.logwarn("Next state None, ending episode")
-                break
-
             total_reward += reward
             state = next_state
 

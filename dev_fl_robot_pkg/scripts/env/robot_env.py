@@ -151,19 +151,36 @@ class RobotEnv:
         dy = self.goal_pose[1] - py
         curr_dist = math.sqrt(dx*dx + dy*dy)
         
+        goal_angle = math.atan2(dy, dx)
+        angle_error = math.atan2(math.sin(goal_angle - yaw), math.cos(goal_angle - yaw))
+
+        heading_reward = math.cos(angle_error)
+        reward += 0.1 * heading_reward
+
+        v = action[0]   # raw network action
+
+        forward_bonus = max(0.0, v) * max(0.0, heading_reward)
+        reward += 0.4 * forward_bonus
+
+        w = action[1]
+        reward -= 0.05 * abs(w)
         if not math.isfinite(curr_dist):
             self.prev_dist = None
             return None, -1.0, False
 
         # --- reward: progress ---
         if self.prev_dist is not None:
-            reward += 2.0 * (self.prev_dist - curr_dist)
+            progress = self.prev_dist - curr_dist
+
+            # only count if actually moving toward goal
+            if progress > 0 and heading_reward > 0.3:
+                reward += 4.0 * progress
 
         self.prev_dist = curr_dist
 
         # --- wall penalty ---
-        if min_lidar < 0.4:
-            reward -= (0.4 - min_lidar) * 20.0
+        # if min_lidar < 0.4:
+        #     reward -= (0.4 - min_lidar) * 20.0
 
         # --- time penalty ---
         reward -= 0.001
@@ -187,8 +204,9 @@ class RobotEnv:
             done = True
             rospy.logwarn("⏱ STEP LIMIT")
         print ("lidar :",lidar)
-        print ("current location :",pose,"min dist :", min_lidar, "dist to go :", curr_dist)
-        print ("reward :",reward)
+        print ("current location :",pose)
+        print ("min dist :", min_lidar, "dist to go :", curr_dist)
+        print ("reward :",reward, "start :", self.start_pose, "goals :", self.goal_pose)
         return pose, reward, done
 
     # ----------------------------
