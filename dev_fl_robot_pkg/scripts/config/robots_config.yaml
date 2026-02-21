@@ -1,5 +1,5 @@
 experiment:
-  paradigm: random_start_fixed_goal
+  paradigm: 2 #0 - same start&goal per reset, 1 - random start same goal per reset, 2 - random start and goal per reset
   goal:
     mode: random_per_run
     radius: 0.3

@@ -115,11 +115,11 @@ def main():
     rospy.init_node("multi_robot_launcher", anonymous=True)
 
     # --- Regenerate Terminator layouts from YAML before spawning robots
-    try:
-        subprocess.call(["rosrun", "dev_fl_robot_pkg", "generate_terminal_robots.py"])
-        rospy.loginfo("🛠 Regenerated Terminator layouts from robots_config.yaml")
-    except Exception as e:
-        rospy.logwarn(f"⚠️ Could not regenerate Terminator layouts: {e}")
+    # try:
+    #     subprocess.call(["rosrun", "dev_fl_robot_pkg", "generate_terminal_robots.py"])
+    #     rospy.loginfo("🛠 Regenerated Terminator layouts from robots_config.yaml")
+    # except Exception as e:
+    #     rospy.logwarn(f"⚠️ Could not regenerate Terminator layouts: {e}")
 
     with open(CONFIG_PATH, "r") as f:
         config = yaml.safe_load(f)
@@ -194,9 +194,9 @@ def main():
         list_robot_topics(name)
 
         # --- Open Terminator with layout for loggers
-        layout_name = f"{name}_layout"
-        rospy.loginfo(f"📟 Opening Terminator for {name} with layout {layout_name}")
-        subprocess.Popen(["terminator", "-l", layout_name])
+        # layout_name = f"{name}_layout"
+        # rospy.loginfo(f"📟 Opening Terminator for {name} with layout {layout_name}")
+        # subprocess.Popen(["terminator", "-l", layout_name])
 
     rospy.loginfo("✅ All deployable robots + mazes launched successfully.")
     rospy.spin()

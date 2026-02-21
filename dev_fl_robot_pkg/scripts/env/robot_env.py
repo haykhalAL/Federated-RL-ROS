@@ -1,5 +1,6 @@
 import rospy
 import math
+import random
 from gazebo_msgs.srv import SetModelState
 from gazebo_msgs.msg import ModelState
 from sensor_msgs.msg import LaserScan
@@ -8,26 +9,6 @@ from std_srvs.srv import Empty
 import time
 
 
-# ----------------------------
-# LOW-LEVEL RESET (NO RANDOM)
-# ----------------------------
-def reset_robot_pose(robot_name, pose):
-    rospy.wait_for_service("/gazebo/set_model_state")
-    set_state = rospy.ServiceProxy("/gazebo/set_model_state", SetModelState)
-
-    x, y, yaw = pose
-
-    state = ModelState()
-    state.model_name = robot_name
-    state.pose.position.x = x
-    state.pose.position.y = y
-    state.pose.position.z = 0.01
-
-    state.pose.orientation.z = math.sin(yaw / 2.0)
-    state.pose.orientation.w = math.cos(yaw / 2.0)
-
-    state.reference_frame = "world"
-    set_state(state)
 
 
 # ============================
@@ -38,32 +19,31 @@ class RobotEnv:
     def __init__(
         self,
         controller,
-        start_pose,
-        goal_pose,
         goal_radius,
+        paradigm,
         max_steps=500
     ):
         self.controller = controller
-
-        # navigation task
-        self.start_pose = start_pose      # (x, y, yaw)
-        self.goal_pose = goal_pose        # (x, y)
+        self.paradigm = paradigm
         self.goal_radius = goal_radius
-
+        self.start_pose = None
+        self.goal_pose = None
+        
+        
         # episode control
         self.step_count = 0
         self.max_steps = max_steps
         self.prev_dist = None
         self.lidar_ranges = None
 
-        rospy.loginfo("⏳ Waiting for Gazebo physics services...")
+        rospy.loginfo("Waiting for Gazebo physics services...")
         rospy.wait_for_service("/gazebo/pause_physics")
         rospy.wait_for_service("/gazebo/unpause_physics")
 
         self.pause_physics = rospy.ServiceProxy("/gazebo/pause_physics", Empty)
         self.unpause_physics = rospy.ServiceProxy("/gazebo/unpause_physics", Empty)
 
-        rospy.loginfo("✅ Gazebo physics services connected")
+        rospy.loginfo("Gazebo physics services connected")
 
         rospy.Subscriber(
             f"/{self.controller.robot_name}/scan",
@@ -79,12 +59,31 @@ class RobotEnv:
     # RESET = NEW EPISODE
     # ----------------------------
     def reset(self):
-        reset_robot_pose(
+
+        self.pause_physics()
+        
+        self.reset_robot_pose(
             self.controller.robot_name,
-            self.start_pose
+            self.paradigm
         )
 
-        rospy.sleep(0.2)
+        self.controller.clear_sensor_buffer()
+
+        self.unpause_physics()
+
+        state = None
+        start = rospy.Time.now()
+
+        while state is None and not rospy.is_shutdown():
+            state = self.controller.get_state()
+
+            # safety timeout (prevents infinite hang)
+            if (rospy.Time.now() - start).to_sec() > 2.0:
+                rospy.logwarn("Reset sensor timeout — retrying...")
+                return self.reset()
+
+            rospy.sleep(0.05)
+
         self.step_count = 0
         self.prev_dist = None
 
@@ -93,28 +92,44 @@ class RobotEnv:
             f"start={self.start_pose} goal={self.goal_pose}"
         )
 
-        return self.controller.get_state()
+        return state
+
+    # ----------------------------
+    # LOW-LEVEL RESET (NO RANDOM)
+    # ----------------------------
+    def reset_robot_pose(self,robot_name,paradigm):
+        rospy.wait_for_service("/gazebo/set_model_state")
+        set_state = rospy.ServiceProxy("/gazebo/set_model_state", SetModelState)
+
+        self.start_pose, self.goal_pose = self.set_start_and_goals(paradigm)
+        x, y, yaw = self.start_pose
+        state = ModelState()
+        state.model_name = robot_name
+        state.pose.position.x = x
+        state.pose.position.y = y
+        state.pose.position.z = 0.01
+
+        state.pose.orientation.z = math.sin(yaw / 2.0)
+        state.pose.orientation.w = math.cos(yaw / 2.0)
+
+        state.reference_frame = "world"
+        set_state(state)
 
     # ----------------------------
     # STEP
     # ----------------------------
     def step(self, action):
-        STEP_DT = 0.2  # seconds of simulation per RL step
+
+        STEP_DT = 0.25  # duration of one RL step
 
         reward = 0.0
         done = False
-        print("step press")
-        # --- unpause physics ---
-        self.unpause_physics()
-        print("unpaused")
-        # --- apply action ONCE ---
+
+        # --- apply action ---
         self.controller.step(action)
 
-        # --- let simulation advance deterministically ---
-        time.sleep(STEP_DT)
-
-        # --- pause physics ---
-        self.pause_physics()
+        # --- let simulation run naturally ---
+        rospy.sleep(STEP_DT)
 
         # --- read pose ---
         pose = self.controller.get_pose_state()
@@ -135,42 +150,46 @@ class RobotEnv:
         dx = self.goal_pose[0] - px
         dy = self.goal_pose[1] - py
         curr_dist = math.sqrt(dx*dx + dy*dy)
-
+        
         if not math.isfinite(curr_dist):
             self.prev_dist = None
             return None, -1.0, False
 
-        # --- distance shaping ---
+        # --- reward: progress ---
         if self.prev_dist is not None:
             reward += 2.0 * (self.prev_dist - curr_dist)
 
         self.prev_dist = curr_dist
 
-        # --- wall proximity penalty ---
+        # --- wall penalty ---
         if min_lidar < 0.4:
             reward -= (0.4 - min_lidar) * 20.0
 
         # --- time penalty ---
         reward -= 0.001
 
-        # --- termination ---
+        # --- success ---
         if curr_dist <= self.goal_radius:
             reward += 100.0
             done = True
             rospy.loginfo("🏁 GOAL REACHED")
 
+        # --- collision ---
         elif self.controller.has_collision():
             reward -= 100.0
             done = True
             rospy.logwarn("💥 COLLISION")
 
+        # --- max steps ---
         self.step_count += 1
         if self.step_count >= self.max_steps:
             reward -= 20.0
             done = True
             rospy.logwarn("⏱ STEP LIMIT")
-
-        return None, reward, done
+        print ("lidar :",lidar)
+        print ("current location :",pose,"min dist :", min_lidar, "dist to go :", curr_dist)
+        print ("reward :",reward)
+        return pose, reward, done
 
     # ----------------------------
     # GOAL CHECK
@@ -212,3 +231,37 @@ class RobotEnv:
             sectors[idx] = min(sectors[idx], r)
 
         return sectors
+
+    def set_start_and_goals(self, paradigm):
+        grid_centers = [
+        (-2.5, -2.5), (-1.5, -2.5), (-0.5, -2.5), (0.5, -2.5), (1.5, -2.5), (2.5, -2.5),
+        (-2.5, -1.5), (-1.5, -1.5), (-0.5, -1.5), (0.5, -1.5), (1.5, -1.5), (2.5, -1.5),
+        (-2.5, -0.5), (-1.5, -0.5), (-0.5, -0.5), (0.5, -0.5), (1.5, -0.5), (2.5, -0.5),
+        (-2.5,  0.5), (-1.5,  0.5), (-0.5,  0.5), (0.5,  0.5), (1.5,  0.5), (2.5,  0.5),
+        (-2.5,  1.5), (-1.5,  1.5), (-0.5,  1.5), (0.5,  1.5), (1.5,  1.5), (2.5,  1.5),
+        (-2.5,  2.5), (-1.5,  2.5), (-0.5,  2.5), (0.5,  2.5), (1.5,  2.5), (2.5,  2.5),
+        ]
+
+        #0 - same start&goal per reset, 1 - random start same goal per reset, 2 - random start and goal per reset
+        if (paradigm == 0):
+            start_pose = self.start_pose
+            goal_pose = self.goal_pose
+            if (self.start_pose is None):
+                x, y = random.choice(grid_centers)
+                start_pose = (x, y, 0.0)
+            if (self.goal_pose is None):
+                x, y = random.choice(grid_centers)
+                goal_pose = (x, y, 0.0)
+            return start_pose,goal_pose
+        elif(paradigm == 1):
+            goal_pose = self.goal_pose
+            x, y = random.choice(grid_centers)
+            start_pose = (x, y, 0.0)
+            return start_pose,goal_pose
+        elif(paradigm == 2):
+            x, y = random.choice(grid_centers)
+            start_pose = (x, y, 0.0)
+            x, y = random.choice(grid_centers)
+            goal_pose = (x, y, 0.0)
+            return start_pose,goal_pose
+

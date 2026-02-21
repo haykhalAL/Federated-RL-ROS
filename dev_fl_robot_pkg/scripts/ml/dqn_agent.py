@@ -111,3 +111,45 @@ class DQNAgent:
     # -----------------------
     def update_target(self):
         self.target_net.load_state_dict(self.policy_net.state_dict())
+
+def build_dqn_state(env, state, goal):
+
+    pose = env.controller.get_pose_state()
+    if pose is None:
+        return None
+    x, y, yaw = pose
+
+    if not math.isfinite(yaw):
+        yaw = 0.0
+
+    lidar = env.get_lidar_sectors()
+    if lidar is None:
+        return None
+
+    front, fl, fr, left, right, back, bl, br = lidar
+
+    MAX_RANGE = 3.5  # must match your laser max range
+
+    lidar_vals = np.array([front, fl, fr, left, right], dtype=np.float32)
+    lidar_vals = np.clip(lidar_vals, 0.0, MAX_RANGE) / MAX_RANGE
+
+    dx = goal[0] - x
+    dy = goal[1] - y
+
+    goal_dist = math.sqrt(dx*dx + dy*dy)
+    goal_angle = math.atan2(dy, dx) - yaw
+
+    # normalize angle to [-pi, pi]
+    goal_angle = (goal_angle + math.pi) % (2*math.pi) - math.pi
+
+    
+    return np.array([
+        front / 3.5,
+        fl / 3.5,
+        fr / 3.5,
+        left / 3.5,
+        right / 3.5,
+        math.cos(goal_angle),     
+        math.sin(goal_angle),     
+        goal_dist / 5.0           
+    ], dtype=np.float32)

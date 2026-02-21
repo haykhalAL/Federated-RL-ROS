@@ -11,44 +11,39 @@ class RobotControllerClient:
         self.ns = f"/{robot_name}"
 
         # Publishers
-        self.cmd_pub = rospy.Publisher(
-            f"{self.ns}/cmd_vel", Twist, queue_size=10
-        )
+        self.cmd_pub = rospy.Publisher(f"{self.ns}/cmd_vel", Twist, queue_size=10)
 
-        # Subscribers
+        # Sensor cache
         self.lidar_ranges = None
         self.lidar_scan = None
+        self.last_scan = None
+        self.last_odom = None
+
         self.position = None
         self.yaw = None
-        self.last_scan = None
-        self.scan_sub = rospy.Subscriber(
-            f"/{robot_name}/scan",
-            LaserScan,
-            self.scan_callback,
-            queue_size=1
-        )
 
-        rospy.Subscriber(f"{self.ns}/scan", LaserScan, self.scan_callback)
-        rospy.Subscriber(f"{self.ns}/odom", Odometry, self.odom_callback)
+        # Subscribers
+        rospy.Subscriber(f"{self.ns}/scan", LaserScan, self.scan_callback, queue_size=1)
+        rospy.Subscriber(f"{self.ns}/odom", Odometry, self.odom_callback, queue_size=1)
 
         self.linear_speed = 0.2
         self.angular_speed = 0.5
-        self.collision_distance = 0.18  
+        self.collision_distance = 0.18
+
+    # ------------------ Callbacks ------------------
 
     def scan_callback(self, msg):
         self.lidar_ranges = msg.ranges
         self.lidar_scan = msg
+        self.last_scan = msg
 
-    def get_lidar_scan(self):
-        return self.lidar_scan
-    
     def odom_callback(self, msg):
+        self.last_odom = msg
         self.position = msg.pose.pose.position
-        orientation = msg.pose.pose.orientation
-        self.yaw = math.atan2(
-            2*(orientation.w*orientation.z),
-            1 - 2*(orientation.z**2)
-        )
+        q = msg.pose.pose.orientation
+        self.yaw = math.atan2(2*(q.w*q.z), 1 - 2*(q.z*q.z))
+
+    # ------------------ Actions ------------------
 
     def step(self, action):
         twist = Twist()
@@ -60,21 +55,32 @@ class RobotControllerClient:
             twist.angular.z = -self.angular_speed
         self.cmd_pub.publish(twist)
 
+    # ------------------ Sensors ------------------
+
     def has_collision(self):
         if self.lidar_ranges is None:
             return False
         return min(self.lidar_ranges) < self.collision_distance
 
-    def get_state(self):
-        return self.lidar_ranges
-
     def get_pose_state(self):
-        if self.position is None or self.yaw is None:
+        if self.last_odom is None:
             return None
         return (self.position.x, self.position.y, self.yaw)
-    
+
     def get_lidar_ranges(self):
         return self.lidar_ranges
-    
-    
-    
+
+    def get_state(self):
+        if self.last_scan is None or self.last_odom is None:
+            return None
+        return True
+
+    # ------------------ Reset helper ------------------
+
+    def clear_sensor_buffer(self):
+        self.lidar_ranges = None
+        self.lidar_scan = None
+        self.last_scan = None
+        self.last_odom = None
+        self.position = None
+        self.yaw = None
