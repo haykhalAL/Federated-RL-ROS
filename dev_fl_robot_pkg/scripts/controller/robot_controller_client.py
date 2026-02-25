@@ -49,8 +49,8 @@ class RobotControllerClient:
     def step(self, action):
         v, w = action
 
-        MAX_LIN = 0.25
-        MAX_ANG = 4.84
+        MAX_LIN = 0.15
+        MAX_ANG = 2.84
 
         v = float(np.clip(v, -1, 1) * MAX_LIN)
         w = float(np.clip(w, -1, 1) * MAX_ANG)

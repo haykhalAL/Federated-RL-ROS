@@ -118,7 +118,7 @@ class RobotEnv:
     # ----------------------------
     # STEP
     # ----------------------------
-    def step(self, action):
+    def step(self, action,num_lidar_sectors):
 
         STEP_DT = 0.25  # duration of one RL step
 
@@ -139,7 +139,7 @@ class RobotEnv:
         px, py, yaw = pose
 
         # --- read lidar ---
-        lidar = self.get_lidar_sectors(num_sectors=24)
+        lidar = self.get_lidar_sectors(num_sectors= num_lidar_sectors)
         if lidar is None:
             rospy.logwarn("LiDAR not ready, skipping step")
             return None, 0.0, False
@@ -155,26 +155,28 @@ class RobotEnv:
         angle_error = math.atan2(math.sin(goal_angle - yaw), math.cos(goal_angle - yaw))
 
         heading_reward = math.cos(angle_error)
-        reward += 0.1 * heading_reward
+        reward += 50.5 * heading_reward
 
         v = action[0]   # raw network action
 
         forward_bonus = max(0.0, v) * max(0.0, heading_reward)
-        reward += 0.4 * forward_bonus
+        reward += 0.6 * forward_bonus
 
         w = action[1]
-        reward -= 0.05 * abs(w)
+        reward -= 0.15 * abs(w)
         if not math.isfinite(curr_dist):
             self.prev_dist = None
             return None, -1.0, False
 
+        
         # --- reward: progress ---
         if self.prev_dist is not None:
             progress = self.prev_dist - curr_dist
+            reward += 3.0 * progress 
 
-            # only count if actually moving toward goal
-            if progress > 0 and heading_reward > 0.3:
-                reward += 4.0 * progress
+        #     # only count if actually moving toward goal
+        #     if progress > 0 and heading_reward > 0.3:
+        #         reward += 4.0 * progress
 
         self.prev_dist = curr_dist
 
@@ -183,17 +185,17 @@ class RobotEnv:
         #     reward -= (0.4 - min_lidar) * 20.0
 
         # --- time penalty ---
-        reward -= 0.001
+        reward -= 0.002
 
         # --- success ---
         if curr_dist <= self.goal_radius:
-            reward += 100.0
+            reward += 1000.0
             done = True
             rospy.loginfo("🏁 GOAL REACHED")
 
         # --- collision ---
         elif self.controller.has_collision():
-            reward -= 100.0
+            reward -= 1000.0
             done = True
             rospy.logwarn("💥 COLLISION")
 
@@ -203,7 +205,8 @@ class RobotEnv:
             reward -= 20.0
             done = True
             rospy.logwarn("⏱ STEP LIMIT")
-        print ("lidar :",lidar)
+            
+        # print ("lidar :",lidar)
         print ("current location :",pose)
         print ("min dist :", min_lidar, "dist to go :", curr_dist)
         print ("reward :",reward, "start :", self.start_pose, "goals :", self.goal_pose)

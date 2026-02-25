@@ -37,7 +37,7 @@ CONFIG_PATH = os.path.join(
 )
 
 ACTION_DIM = 2
-NUM_LIDAR_SECTORS = 24
+NUM_LIDAR_SECTORS = 8
 STATE_DIM = NUM_LIDAR_SECTORS + 3 
 
 def main():
@@ -79,7 +79,7 @@ def main():
         env.reset()
         done = False
         total_reward = 0.0
-
+        print("lidar :", env.get_lidar_sectors(NUM_LIDAR_SECTORS) )
         state = None
         while state is None and not rospy.is_shutdown():
             state = build_ppo_state(env, env.goal_pose, NUM_LIDAR_SECTORS)
@@ -88,7 +88,7 @@ def main():
         while not done and not rospy.is_shutdown():
             action, logp, value = agent.select_action(state)
             # print("action:", action, "logp:", logp, "value:", value.item())
-            _, reward, done = env.step(action)
+            _, reward, done = env.step(action,NUM_LIDAR_SECTORS)
             # print("state",state)
 
             next_state = None

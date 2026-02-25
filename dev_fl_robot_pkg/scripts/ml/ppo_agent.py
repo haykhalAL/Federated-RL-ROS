@@ -144,8 +144,8 @@ def build_ppo_state(env, goal,num_lidar_sectors):
     x, y, yaw = pose
     if not math.isfinite(yaw):
         yaw = 0.0
-
-    lidar = env.get_lidar_sectors(num_sectors=num_lidar_sectors)
+    print('num_lidar_sectors',env.get_lidar_sectors(num_lidar_sectors))
+    lidar = env.get_lidar_sectors(num_lidar_sectors)
     if lidar is None or len(lidar) != num_lidar_sectors:
         return None
 
