@@ -156,14 +156,88 @@ class RobotController:
     # Manual test loop
     # =============================
 
-    # def spin(self):
-    #     rospy.loginfo(f"[{self.ns}] Controller running")
-    #     while not rospy.is_shutdown():
-    #         # Default behavior: slow forward + obstacle avoidance
-    #         self.move_forward()
-    #         self.rate.sleep()
+    def spin(self):
 
-    def reset_robot_pose(robot_name, maze_spawn, local_grid_centers):
+    rospy.loginfo(f"[{self.ns}] RL Controller running")
+
+    while not rospy.is_shutdown():
+
+        # =========================
+        # Wait until sensors ready
+        # =========================
+        state = self.get_state()
+
+        if state is None:
+            self.rate.sleep()
+            continue
+
+        # =========================
+        # Convert dict -> vector
+        # =========================
+        state_vector = [
+            state["front"],
+            state["left"],
+            state["right"],
+            state["yaw"]
+        ]
+
+        # =========================
+        # Select Action
+        # =========================
+
+        # ----- DQN -----
+        if self.algorithm == "dqn":
+
+            state_tensor = torch.FloatTensor(
+                state_vector
+            ).unsqueeze(0)
+
+            with torch.no_grad():
+                q_values = self.model(state_tensor)
+
+            action = torch.argmax(q_values).item()
+
+        # ----- PPO -----
+        elif self.algorithm == "ppo":
+
+            action, _ = self.model.predict(
+                state_vector,
+                deterministic=True
+            )
+
+        else:
+            rospy.logwarn("Unknown RL algorithm")
+            action = 3  # stop
+
+        # =========================
+        # Execute action
+        # =========================
+        self.step(action)
+
+        # =========================
+        # Collision handling
+        # =========================
+        if self.has_collision():
+
+            rospy.logwarn(f"[{self.ns}] Collision detected!")
+
+            self.stop()
+
+            # Example reset
+            self.reset_robot_pose(
+                self.robot_name,
+                maze_spawn=(0, 0, 0),
+                local_grid_centers=[
+                    (-1, -1),
+                    (1, 1),
+                    (-1, 1),
+                    (1, -1)
+                ]
+            )
+
+        self.rate.sleep()
+
+    def reset_robot_pose(self,robot_name, maze_spawn, local_grid_centers):
         rospy.wait_for_service("/gazebo/set_model_state")
         set_state = rospy.ServiceProxy("/gazebo/set_model_state", SetModelState)
 
@@ -186,4 +260,4 @@ class RobotController:
 if __name__ == "__main__":
     rospy.init_node("robot_controller")
     controller = RobotController()
-    # controller.spin()
+    controller.spin()

@@ -2,7 +2,7 @@
   <!-- Launch Gazebo with your maze world -->
   <include file="$(find gazebo_ros)/launch/empty_world.launch">
     <!-- <arg name="world_name" value="$(find maze_map)/worlds/maze.world"/> -->
-    <arg name="paused" value="true"/>
+    <arg name="paused" value="false"/>
     <arg name="use_sim_time" value="false"/>
     <arg name="gui" value="true"/>
     <arg name="headless" value="false"/>
