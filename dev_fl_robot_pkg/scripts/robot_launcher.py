@@ -10,18 +10,17 @@ import xacro
 import random
 import math
 import rospkg
+from utils.maze_utils import generate_grid_centers
 
-MAZE_SIZE = 6        # meters
-CELL_SIZE = 1.0
-HALF = MAZE_SIZE / 2
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(
-    SCRIPT_DIR,
-    "config",
-    "robots_config.yaml"
-)
 rospack = rospkg.RosPack()
 pkg_path = rospack.get_path("dev_fl_robot_pkg")
+CONFIG_PATH = os.path.join(
+    pkg_path,
+    "scripts",
+    "config",
+    "experiment_config.yaml"
+)
+
 URDF_XACRO_PATH = os.path.join(
     pkg_path,
     "models",
@@ -73,31 +72,19 @@ def list_robot_topics(ns):
     except Exception as e:
         rospy.logerr(f"Error listing topics for {ns}: {e}")
 
-def generate_local_grid_centers():
-    """
-    Grid centers in LOCAL maze frame (centered at 0,0)
-    """
-    centers = []
-    cells = int(MAZE_SIZE / CELL_SIZE)
-
-    for i in range(cells):
-        for j in range(cells):
-            x = -HALF + CELL_SIZE / 2 + i * CELL_SIZE
-            y = -HALF + CELL_SIZE / 2 + j * CELL_SIZE
-            centers.append((x, y))
-
-    return centers
 
 
-LOCAL_GRID_CENTERS = generate_local_grid_centers()
 
-def sample_grid_spawn_with_offset(maze_spawn):
+def sample_grid_spawn_with_offset(
+    maze_spawn,
+    grid_centers
+):
     """
     maze_spawn = [mx, my, myaw]
     """
     mx, my, _ = maze_spawn
 
-    lx, ly = random.choice(LOCAL_GRID_CENTERS)
+    lx, ly = random.choice(grid_centers)
 
     # Global coordinates = maze center + local cell center
     x = mx + lx
@@ -123,7 +110,12 @@ def main():
 
     with open(CONFIG_PATH, "r") as f:
         config = yaml.safe_load(f)
+    maze_cfg = config["environment"]["maze"]
 
+    local_grid_centers = generate_grid_centers(
+        maze_cfg["size"],
+        maze_cfg["cell_size"]
+    )
     uuid = roslaunch.rlutil.get_or_generate_uuid(None, False)
     roslaunch.configure_logging(uuid)
     launch = roslaunch.scriptapi.ROSLaunch()
@@ -136,7 +128,10 @@ def main():
 
         name = robot["name"]
         # x, y, z = robot["spawn"]
-        x, y, yaw = sample_grid_spawn_with_offset(robot["maze_spawn"])
+        x, y, yaw = sample_grid_spawn_with_offset(
+            robot["maze_spawn"],
+            local_grid_centers
+        )
         z = 0.01
 
         # --- Load URDF into namespaced robot_description
@@ -155,15 +150,15 @@ def main():
         rospy.loginfo(f"🚀 Deployed {name} at ({x},{y},{z}) in /{name} namespace")
 
         # --- Start robot movement controller (one per robot)
-        controller = roslaunch.core.Node(
-            package="dev_fl_robot_pkg",
-            node_type="robot_controller.py",
-            name="robot_controller",
-            namespace=f"/{name}",
-            output="screen"
-        )
-        rospy.set_param(f"/{name}/robot_controller/robot_name", name)
-        launch.launch(controller)
+        # controller = roslaunch.core.Node(
+        #     package="dev_fl_robot_pkg",
+        #     node_type="robot_controller.py",
+        #     name="robot_controller",
+        #     namespace=f"/{name}",
+        #     output="screen"
+        # )
+        # rospy.set_param(f"/{name}/robot_controller/robot_name", name)
+        # launch.launch(controller)
 
         rospy.loginfo(f"🕹 Robot movement controller started for {name}")
 

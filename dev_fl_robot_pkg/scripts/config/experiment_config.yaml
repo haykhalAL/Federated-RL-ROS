@@ -1,0 +1,122 @@
+experiment:
+  algorithm: dqn          # dqn | ppo | qlearning
+  paradigm: 2             # 0=fixed start & goal
+                           # 1=random start, fixed goal
+                           # 2=random start & random goal
+  seed: 42
+
+  training:
+    episodes: 1000
+    max_steps: 500
+    step_dt: 0.25
+
+    checkpoint:
+      enabled: true
+      interval: 50
+
+  lidar:
+    sectors: 24
+
+  goal:
+    mode: random_per_run
+    radius: 0.30
+
+  reward:
+    terminal:
+      goal: 1000
+      collision: -1000
+
+    shaping:
+      progress: 3.0
+      heading: 1.0
+      forward: 0.5
+      turn_penalty: 0.10
+      wall_distance: 0.40
+      wall_penalty: 5.0
+      time: 0.002
+
+  algorithms:
+
+    dqn:
+      learning_rate: 0.001
+      gamma: 0.99
+      epsilon: 1.0
+      epsilon_min: 0.05
+      epsilon_decay: 0.995
+      replay_buffer: 100000
+      batch_size: 64
+      target_update: 10
+
+    ppo:
+      learning_rate: 0.0003
+      gamma: 0.99
+      gae_lambda: 0.95
+      clip: 0.20
+      epochs: 10
+
+    qlearning:
+      learning_rate: 0.10
+      gamma: 0.99
+      epsilon: 1.0
+      epsilon_min: 0.05
+      epsilon_decay: 0.995
+
+environment:
+  maze:
+    size: 6
+    cell_size: 1.0
+
+federated:
+  enabled: false
+
+  aggregation:
+    algorithm: FedAvg
+    communication_rounds: 100
+    local_episodes: 10
+
+logging:
+  tensorboard: true
+  csv: true
+
+  log_dir: logs
+  model_dir: models
+
+robots:
+  - name: robot1
+    deploy: true
+
+    spawn: [0.0, 0.0, 0.0]
+    maze_spawn: [0.0, 0.0, 0.0]
+
+    linear_speed: 0.25
+    angular_speed: 1.0
+    collision_distance: 0.25
+
+    loggers:
+      - odom
+      - lidar
+      - velocity
+
+  # - name: robot2
+  #   deploy: true
+  #   spawn: [7.0, 0.0, 0.0]
+  #   maze_spawn: [7.0, 0.0, 0.0]
+  #   linear_speed: 0.25
+  #   angular_speed: 1.0
+  #   collision_distance: 0.25
+  #   loggers:
+  #     - odom
+  #     - lidar
+  #     - velocity
+
+  # - name: robot3
+  #   deploy: true
+  #   spawn: [0.0, 7.0, 0.0]
+  #   maze_spawn: [0.0, 7.0, 0.0]
+  #   linear_speed: 0.25
+  #   angular_speed: 1.0
+  #   collision_distance: 0.25
+  #   loggers:
+  #     - odom
+  #     - lidar
+  #     - velocity

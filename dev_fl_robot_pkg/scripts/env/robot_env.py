@@ -3,11 +3,9 @@ import math
 import random
 from gazebo_msgs.srv import SetModelState
 from gazebo_msgs.msg import ModelState
-from sensor_msgs.msg import LaserScan
 import numpy as np
 from std_srvs.srv import Empty
-import time
-
+from utils.maze_utils import generate_grid_centers
 
 
 
@@ -18,23 +16,44 @@ class RobotEnv:
 
     def __init__(
         self,
-        controller,
-        goal_radius,
-        paradigm,
-        max_steps=500
+        robot,
+        config
     ):
-        self.controller = controller
-        self.paradigm = paradigm
-        self.goal_radius = goal_radius
+        self.robot = robot
         self.start_pose = None
         self.goal_pose = None
-        
+        self.step_dt = 0.25
+
+        exp = config["experiment"]
+        training = exp["training"]
+
+        maze_cfg = config["environment"]["maze"]
+
+        self.maze_size = maze_cfg["size"]
+        self.cell_size = maze_cfg["cell_size"]
+
+        self.grid_centers = generate_grid_centers(
+            self.maze_size,
+            self.cell_size
+        )
+
+        self.max_goal_distance = math.sqrt(
+            self.maze_size**2 +
+            self.maze_size**2
+        )
+        self.paradigm = exp["paradigm"]
+        self.goal_radius = exp["goal"]["radius"]
+
+        self.step_dt = training["step_dt"]
+        self.max_steps = training["max_steps"]
+
+        self.num_lidar_sectors = exp["lidar"]["sectors"]
+        terminal = self.reward_cfg["terminal"]
+        shaping = self.reward_cfg["shaping"]
         
         # episode control
         self.step_count = 0
-        self.max_steps = max_steps
         self.prev_dist = None
-        self.lidar_ranges = None
 
         rospy.loginfo("Waiting for Gazebo physics services...")
         rospy.wait_for_service("/gazebo/pause_physics")
@@ -44,30 +63,21 @@ class RobotEnv:
         self.unpause_physics = rospy.ServiceProxy("/gazebo/unpause_physics", Empty)
 
         rospy.loginfo("Gazebo physics services connected")
-
-        rospy.Subscriber(
-            f"/{self.controller.robot_name}/scan",
-            LaserScan,
-            self._lidar_callback
-        )
-
-    def _lidar_callback(self, msg):
-        self.lidar_ranges = np.array(msg.ranges)
-
     
     # ----------------------------
     # RESET = NEW EPISODE
     # ----------------------------
+        
     def reset(self):
 
         self.pause_physics()
         
         self.reset_robot_pose(
-            self.controller.robot_name,
+            self.robot.robot_name,
             self.paradigm
         )
 
-        self.controller.clear_sensor_buffer()
+        self.robot.clear_sensor_buffer()
 
         self.unpause_physics()
 
@@ -75,7 +85,7 @@ class RobotEnv:
         start = rospy.Time.now()
 
         while state is None and not rospy.is_shutdown():
-            state = self.controller.get_state()
+            state = self.build_state()
 
             # safety timeout (prevents infinite hang)
             if (rospy.Time.now() - start).to_sec() > 2.0:
@@ -88,7 +98,7 @@ class RobotEnv:
         self.prev_dist = None
 
         rospy.loginfo(
-            f"[RESET] robot={self.controller.robot_name} "
+            f"[RESET] robot={self.robot.robot_name} "
             f"start={self.start_pose} goal={self.goal_pose}"
         )
 
@@ -118,115 +128,70 @@ class RobotEnv:
     # ----------------------------
     # STEP
     # ----------------------------
-    def step(self, action,num_lidar_sectors):
+    def step(self, action):
 
-        STEP_DT = 0.25  # duration of one RL step
-
-        reward = 0.0
-        done = False
-
-        # --- apply action ---
-        self.controller.step(action)
-
-        # --- let simulation run naturally ---
-        rospy.sleep(STEP_DT)
-
-        # --- read pose ---
-        pose = self.controller.get_pose_state()
-        if pose is None:
-            return None, 0.0, False
-
-        px, py, yaw = pose
-
-        # --- read lidar ---
-        lidar = self.get_lidar_sectors(num_sectors= num_lidar_sectors)
-        if lidar is None:
-            rospy.logwarn("LiDAR not ready, skipping step")
-            return None, 0.0, False
-
-        min_lidar = float(np.min(lidar))
-
-        # --- distance to goal ---
-        dx = self.goal_pose[0] - px
-        dy = self.goal_pose[1] - py
-        curr_dist = math.sqrt(dx*dx + dy*dy)
-        
-        goal_angle = math.atan2(dy, dx)
-        angle_error = math.atan2(math.sin(goal_angle - yaw), math.cos(goal_angle - yaw))
-
-        heading_reward = math.cos(angle_error)
-        reward += 50.5 * heading_reward
-
-        v = action[0]   # raw network action
-
-        forward_bonus = max(0.0, v) * max(0.0, heading_reward)
-        reward += 0.6 * forward_bonus
-
-        w = action[1]
-        reward -= 0.15 * abs(w)
-        if not math.isfinite(curr_dist):
-            self.prev_dist = None
-            return None, -1.0, False
-
-        
-        # --- reward: progress ---
-        if self.prev_dist is not None:
-            progress = self.prev_dist - curr_dist
-            reward += 3.0 * progress 
-
-        #     # only count if actually moving toward goal
-        #     if progress > 0 and heading_reward > 0.3:
-        #         reward += 4.0 * progress
-
-        self.prev_dist = curr_dist
-
-        # --- wall penalty ---
-        # if min_lidar < 0.4:
-        #     reward -= (0.4 - min_lidar) * 20.0
-
-        # --- time penalty ---
-        reward -= 0.002
-
-        # --- success ---
-        if curr_dist <= self.goal_radius:
-            reward += 1000.0
-            done = True
-            rospy.loginfo("🏁 GOAL REACHED")
-
-        # --- collision ---
-        elif self.controller.has_collision():
-            reward -= 1000.0
-            done = True
-            rospy.logwarn("💥 COLLISION")
-
-        # --- max steps ---
         self.step_count += 1
-        if self.step_count >= self.max_steps:
-            reward -= 20.0
-            done = True
-            rospy.logwarn("⏱ STEP LIMIT")
-            
-        # print ("lidar :",lidar)
-        print ("current location :",pose)
-        print ("min dist :", min_lidar, "dist to go :", curr_dist)
-        print ("reward :",reward, "start :", self.start_pose, "goals :", self.goal_pose)
-        return pose, reward, done
 
-    # ----------------------------
-    # GOAL CHECK
-    # ----------------------------
-    def _check_goal(self, state):
-        x = state[0]
-        y = state[1]
+        # Execute action
+        linear, angular = self.robot.execute_action(action)
 
-        dx = x - self.goal_pose[0]
-        dy = y - self.goal_pose[1]
-        dist = math.sqrt(dx*dx + dy*dy)
+        # Let the robot move for one RL timestep
+        rospy.sleep(self.step_dt)
 
-        return dist <= self.goal_radius
+        # Stop robot before observing next state
+        self.robot.stop()
+
+        next_state = self.build_state()
+
+        if next_state is None:
+            return None, 0.0, False, {}
+
+        curr_dist = self.distance_to_goal()
+
+        if curr_dist is None:
+            return None, 0.0, False, {}
+
+        lidar = self.get_lidar_sectors()
+
+        if lidar is None:
+            return None, 0.0, False, {}
+
+        min_lidar = np.min(lidar)
+
+        reward, reward_info = self.compute_reward(
+            linear,
+            angular,
+            curr_dist,
+            min_lidar
+        )
+
+        terminated = (
+            self.goal_reached(curr_dist)
+            or self.is_collision()
+        )
+
+        truncated = (
+            self.step_count >= self.max_steps
+        )
+
+        done = terminated or truncated
+
+        info = self.get_info(
+            curr_dist,
+            reward,
+            min_lidar
+        )
+
+        info["reward"] = reward_info
+        info["terminated"] = terminated
+        info["truncated"] = truncated
+        return next_state, reward, done, info
+
     
-    def get_lidar_sectors(self, num_sectors=24):
-        scan = self.controller.lidar_scan
+    def get_lidar_sectors(self):
+
+        scan = self.robot.lidar_scan
+
         if scan is None:
             return None
 
@@ -240,31 +205,34 @@ class RobotEnv:
             endpoint=False
         )
 
-        # normalize to [-pi, pi]
         angles = (angles + math.pi) % (2 * math.pi) - math.pi
 
-        sector_width = 2 * math.pi / num_sectors
-        sectors = np.full(num_sectors, scan.range_max, dtype=np.float32)
+        sector_width = 2 * math.pi / self.num_lidar_sectors
+
+        sectors = np.full(
+            self.num_lidar_sectors,
+            scan.range_max,
+            dtype=np.float32
+        )
 
         for r, a in zip(ranges, angles):
+
             idx = int((a + math.pi) / sector_width)
-            idx = min(idx, num_sectors - 1)
+
+            idx = min(idx, self.num_lidar_sectors - 1)
+
             sectors[idx] = min(sectors[idx], r)
 
         return sectors
 
-    def set_start_and_goals(self, paradigm):
-        grid_centers = [
-        (-2.5, -2.5), (-1.5, -2.5), (-0.5, -2.5), (0.5, -2.5), (1.5, -2.5), (2.5, -2.5),
-        (-2.5, -1.5), (-1.5, -1.5), (-0.5, -1.5), (0.5, -1.5), (1.5, -1.5), (2.5, -1.5),
-        (-2.5, -0.5), (-1.5, -0.5), (-0.5, -0.5), (0.5, -0.5), (1.5, -0.5), (2.5, -0.5),
-        (-2.5,  0.5), (-1.5,  0.5), (-0.5,  0.5), (0.5,  0.5), (1.5,  0.5), (2.5,  0.5),
-        (-2.5,  1.5), (-1.5,  1.5), (-0.5,  1.5), (0.5,  1.5), (1.5,  1.5), (2.5,  1.5),
-        (-2.5,  2.5), (-1.5,  2.5), (-0.5,  2.5), (0.5,  2.5), (1.5,  2.5), (2.5,  2.5),
-        ]
 
+    def set_start_and_goals(self, paradigm):
+        grid_centers = self.grid_centers
+        PARADIGM_FIXED = 0
+        PARADIGM_RANDOM_START = 1
+        PARADIGM_RANDOM_START_GOAL = 2
         #0 - same start&goal per reset, 1 - random start same goal per reset, 2 - random start and goal per reset
-        if (paradigm == 0):
+        if paradigm == PARADIGM_FIXED::
             start_pose = self.start_pose
             goal_pose = self.goal_pose
             if (self.start_pose is None):
@@ -274,15 +242,254 @@ class RobotEnv:
                 x, y = random.choice(grid_centers)
                 goal_pose = (x, y, 0.0)
             return start_pose,goal_pose
-        elif(paradigm == 1):
+        elif paradigm == PARADIGM_RANDOM_START:
             goal_pose = self.goal_pose
             x, y = random.choice(grid_centers)
             start_pose = (x, y, 0.0)
             return start_pose,goal_pose
-        elif(paradigm == 2):
+        elif paradigm == PARADIGM_RANDOM_START_GOAL:
             x, y = random.choice(grid_centers)
             start_pose = (x, y, 0.0)
             x, y = random.choice(grid_centers)
             goal_pose = (x, y, 0.0)
             return start_pose,goal_pose
 
+    def build_state(self):
+
+        pose = self.robot.get_pose_state()
+
+        if pose is None:
+            return None
+
+        px, py, yaw = pose
+
+        lidar = self.get_lidar_sectors()
+
+        if lidar is None:
+            return None
+
+        dx = self.goal_pose[0] - px
+        dy = self.goal_pose[1] - py
+
+        distance = math.sqrt(dx**2 + dy**2)
+
+        goal_angle = math.atan2(dy, dx)
+
+        angle_error = math.atan2(
+            math.sin(goal_angle - yaw),
+            math.cos(goal_angle - yaw)
+        )
+
+        lidar = lidar / self.robot.lidar_scan.range_max
+
+        goal_distance = min(
+            distance / self.max_goal_distance,
+            1.0
+        )
+
+        state = np.concatenate([
+            lidar,
+            np.array([
+                math.cos(angle_error),
+                math.sin(angle_error),
+                goal_distance
+            ], dtype=np.float32)
+        ])
+
+        return state.astype(np.float32)
+
+    def get_info(
+        self,
+        curr_dist,
+        reward,
+        min_lidar
+    ):
+
+        return {
+
+            "distance": curr_dist,
+
+            "min_lidar": min_lidar,
+
+            "pose": self.robot.get_pose_state(),
+
+            "reward": reward,
+
+            "goal": self.goal_reached(curr_dist),
+
+            "collision": self.robot.has_collision(),
+
+            "step": self.step_count,
+
+            "goal_pose": self.goal_pose,
+
+            "start_pose": self.start_pose
+
+        }
+
+    def goal_reached(self, distance):
+
+        return distance <= self.goal_radius
+
+    def is_collision(self):
+
+        return self.robot.has_collision()
+
+    def distance_to_goal(self):
+
+        pose = self.robot.get_pose_state()
+
+        if pose is None:
+            return None
+
+        px, py, _ = pose
+
+        dx = self.goal_pose[0] - px
+        dy = self.goal_pose[1] - py
+
+        return math.sqrt(dx**2 + dy**2)
+
+
+    def compute_reward(
+        self,
+        linear,
+        angular,
+        curr_dist,
+        min_lidar
+    ):
+
+        reward = 0.0
+
+        pose = self.robot.get_pose_state()
+
+        if pose is None:
+            return 0.0, {}
+
+        px, py, yaw = pose
+
+        # -------------------------
+        # Terminal rewards
+        # -------------------------
+
+        if self.goal_reached(curr_dist):
+            return self.reward_cfg["goal"], {
+                "goal": self.reward_cfg["goal"]
+            }
+
+        if self.is_collision():
+            return self.reward_cfg["collision"], {
+                "collision": self.reward_cfg["collision"]
+            }
+
+        reward_info = {}
+
+        # -------------------------
+        # Progress reward
+        # -------------------------
+
+        progress_reward = 0.0
+
+        if self.prev_dist is not None:
+
+            progress = self.prev_dist - curr_dist
+
+            progress_reward = (
+                self.reward_cfg["progress"] * progress
+            )
+
+            reward += progress_reward
+
+        self.prev_dist = curr_dist
+
+        reward_info["progress"] = progress_reward
+
+        # -------------------------
+        # Heading reward
+        # -------------------------
+
+        dx = self.goal_pose[0] - px
+        dy = self.goal_pose[1] - py
+
+        goal_angle = math.atan2(dy, dx)
+
+        angle_error = math.atan2(
+            math.sin(goal_angle - yaw),
+            math.cos(goal_angle - yaw)
+        )
+
+        heading = math.cos(angle_error)
+
+        heading_reward = (
+            self.reward_cfg["heading"] * heading
+        )
+
+        reward += heading_reward
+
+        reward_info["heading"] = heading_reward
+
+        # -------------------------
+        # Forward reward
+        # -------------------------
+
+
+        forward_reward = (
+            self.reward_cfg["forward"]
+            * max(0.0, linear)
+            * max(0.0, heading)
+        )
+
+        reward += forward_reward
+
+        reward_info["forward"] = forward_reward
+
+        # -------------------------
+        # Turning penalty
+        # -------------------------
+
+
+        turn_penalty = (
+            self.reward_cfg["turn_penalty"]
+            * abs(angular)
+        )
+
+        reward -= turn_penalty
+
+        reward_info["turn"] = -turn_penalty
+
+        # -------------------------
+        # Wall penalty
+        # -------------------------
+
+        wall_penalty = 0.0
+
+        if min_lidar < self.reward_cfg["wall_distance"]:
+
+            wall_penalty = (
+                self.reward_cfg["wall_distance"] - min_lidar
+            ) * self.reward_cfg["wall_penalty"]
+
+            reward -= wall_penalty
+
+        reward_info["wall"] = -wall_penalty
+
+        # -------------------------
+        # Time penalty
+        # -------------------------
+
+        reward -= self.reward_cfg["time"]
+
+        reward_info["time"] = -self.reward_cfg["time"]
+
+        reward = float(np.clip(
+            reward,
+            -1000,
+            1000
+        ))
+
+        reward_info["total"] = reward
+
+        return reward, reward_info
+
+    @property
+    def observation_size(self):
+        return self.num_lidar_sectors + 3
