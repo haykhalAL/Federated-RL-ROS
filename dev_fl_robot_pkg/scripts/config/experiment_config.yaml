@@ -1,6 +1,6 @@
 experiment:
   algorithm: dqn          # dqn | ppo | qlearning
-  paradigm: 2             # 0=fixed start & goal
+  paradigm: 0             # 0=fixed start & goal
                            # 1=random start, fixed goal
                            # 2=random start & random goal
   seed: 42

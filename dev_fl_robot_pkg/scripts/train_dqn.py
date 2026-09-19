@@ -3,6 +3,7 @@
 import os
 import random
 import yaml
+import math
 
 import numpy as np
 import torch
@@ -10,9 +11,11 @@ import torch
 import rospy
 import rospkg
 
+
 from robot_interface import RobotInterface
-from robot_env import RobotEnv
+from env.robot_env import RobotEnv
 from ml.dqn_agent import DQNAgent
+from dataLogger.logger import DQNLogger
 
 
 def load_config():
@@ -80,6 +83,7 @@ def train():
     exp = config["experiment"]
 
     training = exp["training"]
+    algo = exp["algorithms"]["dqn"]
 
     set_seed(exp["seed"])
 
@@ -110,7 +114,8 @@ def train():
         env,
         config
     )
-
+    
+    logger = DQNLogger()
     rospy.loginfo("========== TRAINING START ==========")
 
     for episode in range(training["episodes"]):
@@ -123,7 +128,18 @@ def train():
 
         episode_steps = 0
 
-        while not rospy.is_shutdown() and not done:
+        path_length = 0.0
+        previous_pose = None
+
+        collision_count = 0
+        success = False
+        final_distance = 0.0
+
+        while (
+                not rospy.is_shutdown()
+                and not done
+                and episode_steps < training["max_steps"]
+            ):
 
             action = agent.select_action(
                 state
@@ -132,7 +148,41 @@ def train():
             next_state, reward, done, info = env.step(
                 action
             )
+            pose = info.get("pose")
 
+            if pose is not None:
+
+                x, y, yaw = pose
+
+                if previous_pose is not None:
+
+                    previous_x, previous_y, _ = previous_pose
+
+                    dx = x - previous_x
+                    dy = y - previous_y
+
+                    path_length += math.sqrt(
+                        dx * dx + dy * dy
+                    )
+
+                previous_pose = pose
+
+
+            # Track collisions
+            if info.get("collision", False):
+                collision_count += 1
+
+
+            # Track goal
+            success = info.get(
+                "goal",
+                success
+            )
+
+            final_distance = info.get(
+                "distance",
+                final_distance
+            )
             agent.remember(
 
                 state,
@@ -147,7 +197,13 @@ def train():
             )
 
             agent.learn()
-
+            logger.log_step(
+                episode=episode,
+                step=episode_steps,
+                info=info,
+                action=action,
+                reward=reward
+            )
             state = next_state
 
             episode_reward += reward
@@ -156,13 +212,29 @@ def train():
 
         agent.end_episode()
 
-        if episode % training["target_update"] == 0:
-
+        if (episode + 1) % algo["target_update"] == 0:
             agent.update_target()
 
+        logger.log_episode(
+            episode=episode,
+            total_reward=episode_reward,
+            steps=episode_steps,
+            success=success,
+            collision_count=collision_count,
+            final_distance=final_distance,
+            path_length=path_length,
+            epsilon=agent.epsilon
+        )
         rospy.loginfo(
 
-            "Episode %d | Reward %.2f | Steps %d | Epsilon %.3f",
+            "Episode %d | "
+            "Reward %.2f | "
+            "Steps %d | "
+            "Success %s | "
+            "Collisions %d | "
+            "Distance %.3f | "
+            "Path %.3f | "
+            "Epsilon %.3f",
 
             episode,
 
@@ -170,10 +242,19 @@ def train():
 
             episode_steps,
 
+            success,
+
+            collision_count,
+
+            final_distance,
+
+            path_length,
+
             agent.epsilon
         )
 
     rospy.loginfo("Training Finished")
+    logger.close()
 
 
 if __name__ == "__main__":

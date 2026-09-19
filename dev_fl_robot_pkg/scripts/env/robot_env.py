@@ -48,8 +48,20 @@ class RobotEnv:
         self.max_steps = training["max_steps"]
 
         self.num_lidar_sectors = exp["lidar"]["sectors"]
-        terminal = self.reward_cfg["terminal"]
-        shaping = self.reward_cfg["shaping"]
+
+        reward_cfg = exp["reward"]
+
+        self.reward_cfg = {
+            "goal": reward_cfg["terminal"]["goal"],
+            "collision": reward_cfg["terminal"]["collision"],
+            "progress": reward_cfg["shaping"]["progress"],
+            "heading": reward_cfg["shaping"]["heading"],
+            "forward": reward_cfg["shaping"]["forward"],
+            "turn_penalty": reward_cfg["shaping"]["turn_penalty"],
+            "wall_distance": reward_cfg["shaping"]["wall_distance"],
+            "wall_penalty": reward_cfg["shaping"]["wall_penalty"],
+            "time": reward_cfg["shaping"]["time"]
+        }
         
         # episode control
         self.step_count = 0
@@ -232,7 +244,7 @@ class RobotEnv:
         PARADIGM_RANDOM_START = 1
         PARADIGM_RANDOM_START_GOAL = 2
         #0 - same start&goal per reset, 1 - random start same goal per reset, 2 - random start and goal per reset
-        if paradigm == PARADIGM_FIXED::
+        if paradigm == PARADIGM_FIXED:
             start_pose = self.start_pose
             goal_pose = self.goal_pose
             if (self.start_pose is None):

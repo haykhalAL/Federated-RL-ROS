@@ -9,14 +9,19 @@
   </include>
 
   <!-- Load TurtleBot3 URDF -->
-  <param name="robot_description" command="$(find xacro)/xacro $(find turtlebot3_description)/urdf/turtlebot3_$(env TURTLEBOT3_MODEL).urdf.xacro"/>
+  <param name="robot_description"
+         command="$(find xacro)/xacro $(find turtlebot3_description)/urdf/turtlebot3_$(env TURTLEBOT3_MODEL).urdf.xacro"/>
 
-  <!-- Publish robot state
-  <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher"/> -->
-
+  <!-- Robot launcher -->
   <node pkg="dev_fl_robot_pkg"
         type="robot_launcher.py"
         name="robot_launcher"
         output="screen"/>
 
+  <!-- DQN experiment -->
+  <node pkg="dev_fl_robot_pkg"
+        type="train_dqn.py"
+        name="train_dqn"
+        output="screen"
+        args="--config $(find dev_fl_robot_pkg)/scripts/config/experiment_config.yaml"/>
 </launch>
