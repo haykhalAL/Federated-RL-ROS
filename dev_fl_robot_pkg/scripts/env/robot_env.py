@@ -14,15 +14,19 @@ from utils.maze_utils import generate_grid_centers
 # ============================
 class RobotEnv:
 
-    def __init__(
-        self,
-        robot,
-        config
-    ):
+    def __init__(self, robot, config, robot_config=None):
         self.robot = robot
+        self.robot_config = robot_config
+
+        if self.robot_config is None:
+            raise RuntimeError(
+                f"No configuration provided for robot: {robot.robot_name}"
+            )
+
         self.start_pose = None
         self.goal_pose = None
         self.step_dt = 0.25
+        
 
         exp = config["experiment"]
         training = exp["training"]
@@ -31,7 +35,12 @@ class RobotEnv:
 
         self.maze_size = maze_cfg["size"]
         self.cell_size = maze_cfg["cell_size"]
+        collision_cfg = exp["collision"]
 
+        self.collision_cfg = {
+            "lidar_threshold": collision_cfg["lidar_threshold"],
+            "min_close_rays": collision_cfg["min_close_rays"]
+        }
         self.grid_centers = generate_grid_centers(
             self.maze_size,
             self.cell_size
@@ -197,6 +206,8 @@ class RobotEnv:
         info["reward"] = reward_info
         info["terminated"] = terminated
         info["truncated"] = truncated
+        info["done"] = done
+
         return next_state, reward, done, info
 
     
@@ -207,8 +218,25 @@ class RobotEnv:
         if scan is None:
             return None
 
-        ranges = np.array(scan.ranges, dtype=np.float32)
-        ranges = np.clip(ranges, 0.0, scan.range_max)
+        ranges = np.array(
+            scan.ranges,
+            dtype=np.float32
+        )
+
+        # Replace NaN and Inf with maximum sensor range
+        ranges = np.nan_to_num(
+            ranges,
+            nan=scan.range_max,
+            posinf=scan.range_max,
+            neginf=scan.range_min
+        )
+
+        # Keep values inside valid LiDAR range
+        ranges = np.clip(
+            ranges,
+            scan.range_min,
+            scan.range_max
+        )
 
         angles = np.linspace(
             scan.angle_min,
@@ -217,9 +245,14 @@ class RobotEnv:
             endpoint=False
         )
 
-        angles = (angles + math.pi) % (2 * math.pi) - math.pi
+        angles = (
+            (angles + math.pi) % (2 * math.pi)
+        ) - math.pi
 
-        sector_width = 2 * math.pi / self.num_lidar_sectors
+        sector_width = (
+            2 * math.pi /
+            self.num_lidar_sectors
+        )
 
         sectors = np.full(
             self.num_lidar_sectors,
@@ -229,42 +262,84 @@ class RobotEnv:
 
         for r, a in zip(ranges, angles):
 
-            idx = int((a + math.pi) / sector_width)
+            idx = int(
+                (a + math.pi) /
+                sector_width
+            )
 
-            idx = min(idx, self.num_lidar_sectors - 1)
+            idx = min(
+                idx,
+                self.num_lidar_sectors - 1
+            )
 
-            sectors[idx] = min(sectors[idx], r)
+            sectors[idx] = min(
+                sectors[idx],
+                r
+            )
 
         return sectors
 
 
     def set_start_and_goals(self, paradigm):
+        if (
+            self.robot_config is not None
+            and "start" in self.robot_config
+            and "goal" in self.robot_config
+        ):
+            start_pose = tuple(self.robot_config["start"])
+            goal_pose = tuple(self.robot_config["goal"])
+
+            return start_pose, goal_pose
+
+
         grid_centers = self.grid_centers
+
         PARADIGM_FIXED = 0
         PARADIGM_RANDOM_START = 1
         PARADIGM_RANDOM_START_GOAL = 2
-        #0 - same start&goal per reset, 1 - random start same goal per reset, 2 - random start and goal per reset
+
         if paradigm == PARADIGM_FIXED:
+
             start_pose = self.start_pose
             goal_pose = self.goal_pose
-            if (self.start_pose is None):
+
+            if start_pose is None:
                 x, y = random.choice(grid_centers)
                 start_pose = (x, y, 0.0)
-            if (self.goal_pose is None):
+
+            if goal_pose is None:
                 x, y = random.choice(grid_centers)
                 goal_pose = (x, y, 0.0)
-            return start_pose,goal_pose
+
+            return start_pose, goal_pose
+
         elif paradigm == PARADIGM_RANDOM_START:
+
             goal_pose = self.goal_pose
+
+            if goal_pose is None:
+                x, y = random.choice(grid_centers)
+                goal_pose = (x, y, 0.0)
+
             x, y = random.choice(grid_centers)
             start_pose = (x, y, 0.0)
-            return start_pose,goal_pose
+
+            return start_pose, goal_pose
+
         elif paradigm == PARADIGM_RANDOM_START_GOAL:
+
             x, y = random.choice(grid_centers)
             start_pose = (x, y, 0.0)
+
             x, y = random.choice(grid_centers)
             goal_pose = (x, y, 0.0)
-            return start_pose,goal_pose
+
+            return start_pose, goal_pose
+
+        else:
+            raise ValueError(
+                f"Unknown training paradigm: {paradigm}"
+            )
 
     def build_state(self):
 
@@ -329,7 +404,7 @@ class RobotEnv:
 
             "goal": self.goal_reached(curr_dist),
 
-            "collision": self.robot.has_collision(),
+            "collision": self.is_collision(),
 
             "step": self.step_count,
 
@@ -343,9 +418,6 @@ class RobotEnv:
 
         return distance <= self.goal_radius
 
-    def is_collision(self):
-
-        return self.robot.has_collision()
 
     def distance_to_goal(self):
 
@@ -361,7 +433,95 @@ class RobotEnv:
 
         return math.sqrt(dx**2 + dy**2)
 
+    def apply_action(self, action):
+        """
+        Apply an action without advancing the simulation.
+        """
+        linear, angular = self.robot.execute_action(action)
 
+        return linear, angular
+
+
+    def observe_step(self, linear, angular):
+        """
+        Observe the environment after the shared Gazebo step.
+        """
+
+        next_state = self.build_state()
+
+        if next_state is None:
+            return None, 0.0, False, {}
+
+        curr_dist = self.distance_to_goal()
+
+        if curr_dist is None:
+            return None, 0.0, False, {}
+
+        lidar = self.get_lidar_sectors()
+
+        if lidar is None:
+            return None, 0.0, False, {}
+
+        min_lidar = np.min(lidar)
+
+        reward, reward_info = self.compute_reward(
+            linear,
+            angular,
+            curr_dist,
+            min_lidar
+        )
+
+        terminated = (
+            self.goal_reached(curr_dist)
+            or self.is_collision()
+        )
+
+        truncated = self.step_count >= self.max_steps
+
+        done = terminated or truncated
+
+        info = self.get_info(
+            curr_dist,
+            reward,
+            min_lidar
+        )
+
+        info["reward"] = reward_info
+        info["terminated"] = terminated
+        info["truncated"] = truncated
+        info["done"] = done
+
+        return next_state, reward, done, info
+
+    def is_collision(self):
+
+        scan = self.robot.lidar_scan
+
+        if scan is None:
+            return False
+
+        ranges = np.asarray(
+            scan.ranges,
+            dtype=np.float32
+        )
+
+        valid_ranges = ranges[
+            np.isfinite(ranges)
+        ]
+
+        if valid_ranges.size == 0:
+            return False
+
+        close_count = np.sum(
+            valid_ranges
+            < self.collision_cfg["lidar_threshold"]
+        )
+
+        return (
+            close_count
+            >= self.collision_cfg["min_close_rays"]
+        )
+    
     def compute_reward(
         self,
         linear,
@@ -431,8 +591,12 @@ class RobotEnv:
 
         heading = math.cos(angle_error)
 
+        # Heading alignment is rewarded only when the robot
+        # is actually moving forward.
         heading_reward = (
-            self.reward_cfg["heading"] * heading
+            self.reward_cfg["heading"]
+            * max(0.0, linear)
+            * max(0.0, heading)
         )
 
         reward += heading_reward

@@ -33,7 +33,8 @@ class DQNAgent:
         epsilon_min=0.05,
         epsilon_decay=0.995,
         buffer_size=100_000,
-        batch_size=64
+        batch_size=64,
+        target_update=10
     ):
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -45,6 +46,7 @@ class DQNAgent:
         self.batch_size = batch_size
 
         self.memory = deque(maxlen=buffer_size)
+        self.target_update = target_update
 
         self.policy_net = DQN(state_dim, action_dim)
         self.target_net = DQN(state_dim, action_dim)
@@ -63,7 +65,7 @@ class DQNAgent:
         if random.random() < self.epsilon:
             return random.randrange(self.action_dim)
 
-        state_t = torch.FloatTensor(state).unsqueeze(0)
+        state_t = torch.as_tensor(state,dtype=torch.float32).unsqueeze(0)
         with torch.no_grad():
             q_vals = self.policy_net(state_t)
         return q_vals.argmax().item()
@@ -78,29 +80,73 @@ class DQNAgent:
     # LEARN
     # -----------------------
     def learn(self):
+
         if len(self.memory) < self.batch_size:
             return
 
-        batch = random.sample(self.memory, self.batch_size)
+        batch = random.sample(
+            self.memory,
+            self.batch_size
+        )
+
         states, actions, rewards, next_states, dones = zip(*batch)
 
-        # states = torch.FloatTensor(states)
-        # states = torch.FloatTensor(np.array(states))
-        states = torch.from_numpy(np.asarray(states, dtype=np.float32))
-        actions = torch.LongTensor(actions).unsqueeze(1)
-        rewards = torch.FloatTensor(rewards)
-        next_states = torch.FloatTensor(next_states)
-        dones = torch.BoolTensor(dones)
+        states = torch.from_numpy(
+            np.asarray(states, dtype=np.float32)
+        )
 
-        current_q = self.policy_net(states).gather(1, actions).squeeze()
-        next_q = self.target_net(next_states).max(1)[0]
-        target_q = rewards + self.gamma * next_q * (~dones)
+        actions = torch.as_tensor(
+            actions,
+            dtype=torch.long
+        ).unsqueeze(1)
 
-        loss = self.loss_fn(current_q, target_q)
+        rewards = torch.as_tensor(
+            rewards,
+            dtype=torch.float32
+        )
+
+        next_states = torch.from_numpy(
+            np.asarray(next_states, dtype=np.float32)
+        )
+
+        dones = torch.as_tensor(
+            dones,
+            dtype=torch.bool
+        )
+
+        current_q = (
+            self.policy_net(states)
+            .gather(1, actions)
+            .squeeze(1)
+        )
+
+        with torch.no_grad():
+
+            next_q = (
+                self.target_net(next_states)
+                .max(1)[0]
+            )
+
+            target_q = (
+                rewards
+                + self.gamma
+                * next_q
+                * (~dones)
+            )
+
+        loss = self.loss_fn(
+            current_q,
+            target_q
+        )
 
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
+
+        self.steps += 1
+
+        if self.steps % self.target_update == 0:
+            self.update_target()
 
     # -----------------------
     # END EPISODE
@@ -113,45 +159,3 @@ class DQNAgent:
     # -----------------------
     def update_target(self):
         self.target_net.load_state_dict(self.policy_net.state_dict())
-
-def build_dqn_state(env, state, goal):
-
-    pose = env.controller.get_pose_state()
-    if pose is None:
-        return None
-    x, y, yaw = pose
-
-    if not math.isfinite(yaw):
-        yaw = 0.0
-
-    lidar = env.get_lidar_sectors()
-    if lidar is None:
-        return None
-
-    front, fl, fr, left, right, back, bl, br = lidar
-
-    MAX_RANGE = 3.5  # must match your laser max range
-
-    lidar_vals = np.array([front, fl, fr, left, right], dtype=np.float32)
-    lidar_vals = np.clip(lidar_vals, 0.0, MAX_RANGE) / MAX_RANGE
-
-    dx = goal[0] - x
-    dy = goal[1] - y
-
-    goal_dist = math.sqrt(dx*dx + dy*dy)
-    goal_angle = math.atan2(dy, dx) - yaw
-
-    # normalize angle to [-pi, pi]
-    goal_angle = (goal_angle + math.pi) % (2*math.pi) - math.pi
-
-    
-    return np.array([
-        front / 3.5,
-        fl / 3.5,
-        fr / 3.5,
-        left / 3.5,
-        right / 3.5,
-        math.cos(goal_angle),     
-        math.sin(goal_angle),     
-        goal_dist / 5.0           
-    ], dtype=np.float32)

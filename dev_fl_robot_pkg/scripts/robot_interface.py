@@ -1,15 +1,10 @@
-#!/usr/bin/env python3
-
+import rospy
 import math
 
-import rospy
-
 from geometry_msgs.msg import Twist
-from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
-
+from nav_msgs.msg import Odometry
 from tf.transformations import euler_from_quaternion
-
 
 class RobotInterface:
 
@@ -46,43 +41,58 @@ class RobotInterface:
         self.yaw = None
         self.scan = None
         self.lidar_scan = None
+
         self.linear_speed = 0.25
         self.angular_speed = 1.0
 
         self.collision_distance = 0.25
 
     ####################################################
-    # ROS INIT
+    # INIT SERVICE
     ####################################################
-
-    def wait_until_ready(self, timeout=10):
-
-        rate = rospy.Rate(20)
-        start = rospy.Time.now()
-
-        while not rospy.is_shutdown():
-
-            if (
-                self.position is not None and
-                self.yaw is not None and
-                self.scan is not None and
-                self.lidar_scan is not None
-            ):
-                rospy.loginfo(f"[{self.robot_name}] Ready.")
-                return True
-
-            if (rospy.Time.now() - start).to_sec() > timeout:
-                rospy.logerr(f"[{self.robot_name}] Timed out waiting for topics.")
-                return False
-
-            rate.sleep()
-
     def clear_sensor_buffer(self):
 
         self.position = None
         self.yaw = None
         self.scan = None
         self.lidar_scan = None
+
+    def wait_until_ready(self, timeout=10.0):
+
+        start_time = rospy.Time.now()
+
+        rate = rospy.Rate(20)
+
+        while not rospy.is_shutdown():
+
+            if (
+                self.position is not None
+                and self.yaw is not None
+                and self.lidar_scan is not None
+            ):
+                rospy.loginfo(
+                    f"[{self.robot_name}] Sensors ready."
+                )
+                return True
+
+            elapsed = (
+                rospy.Time.now() - start_time
+            ).to_sec()
+
+            if elapsed >= timeout:
+
+                rospy.logwarn(
+                    f"[{self.robot_name}] "
+                    f"Sensor readiness timeout."
+                )
+
+                return False
+
+            rate.sleep()
+
+        return False
+
+    
     ####################################################
     # ROS CALLBACKS
     ####################################################
@@ -91,10 +101,19 @@ class RobotInterface:
 
         self.lidar_scan = msg
 
-        self.scan = [
-            r if not math.isinf(r) else msg.range_max
-            for r in msg.ranges
-        ]
+        self.scan = []
+
+        for r in msg.ranges:
+
+            if math.isnan(r) or math.isinf(r):
+                r = msg.range_max
+
+            r = max(
+                msg.range_min,
+                min(r, msg.range_max)
+            )
+
+            self.scan.append(r)
 
     def odom_callback(self, msg):
 
@@ -112,100 +131,92 @@ class RobotInterface:
     ####################################################
     # ACTIONS
     ####################################################
-    def execute_action(self, action):
 
+    def execute_action(self, action):
         twist = Twist()
 
-        if isinstance(action, (list, tuple)):
+        if action == 0:
+            # Forward
+            twist.linear.x = self.linear_speed
+            twist.angular.z = 0.0
 
-            linear = float(action[0])
-            angular = float(action[1])
+        elif action == 1:
+            # Forward + left
+            twist.linear.x = self.linear_speed
+            twist.angular.z = self.angular_speed
 
-            twist.linear.x = max(
-                0.0,
-                min(self.linear_speed, linear)
-            )
+        elif action == 2:
+            # Forward + right
+            twist.linear.x = self.linear_speed
+            twist.angular.z = -self.angular_speed
 
-            twist.angular.z = max(
-                -self.angular_speed,
-                min(self.angular_speed, angular)
-            )
+        elif action == 3:
+            # Rotate left
+            twist.linear.x = 0.0
+            twist.angular.z = self.angular_speed
+
+        elif action == 4:
+            # Rotate right
+            twist.linear.x = 0.0
+            twist.angular.z = -self.angular_speed
 
         else:
-
-            if action == 0:
-                twist.linear.x = self.linear_speed
-
-            elif action == 1:
-                twist.angular.z = self.angular_speed
-
-            elif action == 2:
-                twist.angular.z = -self.angular_speed
+            raise ValueError(f"Invalid action: {action}")
 
         self.cmd_pub.publish(twist)
-
         return twist.linear.x, twist.angular.z
 
-    # def send_action(self, action):
-
-    #     """
-    #     Supports
-
-    #     DQN:
-    #         action = 0,1,2
-
-    #     PPO/SAC:
-    #         action = [linear, angular]
-    #     """
-
-    #     twist = Twist()
-
-    #     if isinstance(action, (list, tuple)):
-
-    #         linear = float(action[0])
-    #         angular = float(action[1])
-
-    #         twist.linear.x = max(
-    #             0.0,
-    #             min(self.linear_speed, linear)
-    #         )
-
-    #         twist.angular.z = max(
-    #             -self.angular_speed,
-    #             min(self.angular_speed, angular)
-    #         )
-
-    #     else:
-
-    #         if action == 0:
-
-    #             twist.linear.x = self.linear_speed
-
-    #         elif action == 1:
-
-    #             twist.angular.z = self.angular_speed
-
-    #         elif action == 2:
-
-    #             twist.angular.z = -self.angular_speed
-
-    #     self.cmd_pub.publish(twist)
-
-    ####################################################
-    # HELPERS
-    ####################################################
-
     def stop(self):
+        twist = Twist()
+        twist.linear.x = 0.0
+        twist.angular.z = 0.0
 
-        self.cmd_pub.publish(Twist())
+        self.cmd_pub.publish(twist)
+    ####################################################
+    # COLLISION / SENSOR HELPERS
+    ####################################################
+
+    def get_min_lidar_distance(self):
+
+        if self.scan is None:
+            return None
+
+        valid_ranges = [
+            r for r in self.scan
+            if not math.isnan(r) and not math.isinf(r)
+        ]
+
+        if not valid_ranges:
+            return None
+
+        return min(valid_ranges)
 
     def has_collision(self):
 
         if self.scan is None:
-
             return False
 
-        return min(self.scan) < self.collision_distance
+        valid_ranges = [
+            r for r in self.scan
+            if not math.isnan(r)
+            and not math.isinf(r)
+        ]
+
+        if not valid_ranges:
+            return False
+
+        # Count how many LiDAR rays are extremely close
+        close_count = sum(
+            1 for r in valid_ranges
+            if r < 0.15
+        )
+
+        # Require multiple rays to be close before declaring collision
+        return close_count >= 3
+
+    ####################################################
+    # POSE
+    ####################################################
 
     def get_pose_state(self):
 

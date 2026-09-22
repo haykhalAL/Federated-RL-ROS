@@ -4,6 +4,7 @@ experiment:
                            # 1=random start, fixed goal
                            # 2=random start & random goal
   seed: 42
+  #seed 42 for testing it can learn 1 block movement
 
   training:
     episodes: 1000
@@ -14,6 +15,12 @@ experiment:
       enabled: true
       interval: 50
 
+  federated:
+    enabled: true
+    aggregation:
+      algorithm: FedAvg
+      communication_rounds: 20
+      local_episodes: 10
   lidar:
     sectors: 24
 
@@ -23,18 +30,21 @@ experiment:
 
   reward:
     terminal:
-      goal: 1000
-      collision: -1000
+      goal: 100
+      collision: -100
 
     shaping:
-      progress: 3.0
-      heading: 1.0
-      forward: 0.5
-      turn_penalty: 0.10
+      progress: 10.0
+      heading: 0.5
+      forward: 1.0
+      turn_penalty: 0.05
       wall_distance: 0.40
-      wall_penalty: 5.0
-      time: 0.002
+      wall_penalty: 3.0
+      time: 0.005
 
+  collision:
+    lidar_threshold: 0.15
+    min_close_rays: 3
   algorithms:
 
     dqn:
@@ -78,8 +88,8 @@ logging:
   tensorboard: true
   csv: true
 
-  log_dir: logs
-  model_dir: models
+  log_dir: /root/catkin_ws/src/logs/training
+  model_dir: /root/catkin_ws/src/models
 
 robots:
   - name: robot1
@@ -88,35 +98,47 @@ robots:
     spawn: [0.0, 0.0, 0.0]
     maze_spawn: [0.0, 0.0, 0.0]
 
+    start: [-1.5, -1.5, 0.0]
+    goal: [-1.5, 2.5, 0.0]
+
     linear_speed: 0.25
     angular_speed: 1.0
-    collision_distance: 0.25
 
     loggers:
       - odom
       - lidar
       - velocity
 
-  # - name: robot2
-  #   deploy: true
-  #   spawn: [7.0, 0.0, 0.0]
-  #   maze_spawn: [7.0, 0.0, 0.0]
-  #   linear_speed: 0.25
-  #   angular_speed: 1.0
-  #   collision_distance: 0.25
-  #   loggers:
-  #     - odom
-  #     - lidar
-  #     - velocity
+  - name: robot2
+    deploy: true
 
-  # - name: robot3
-  #   deploy: true
-  #   spawn: [0.0, 7.0, 0.0]
-  #   maze_spawn: [0.0, 7.0, 0.0]
-  #   linear_speed: 0.25
-  #   angular_speed: 1.0
-  #   collision_distance: 0.25
-  #   loggers:
-  #     - odom
-  #     - lidar
-  #     - velocity
+    spawn: [7.0, 0.0, 0.0]
+    maze_spawn: [7.0, 0.0, 0.0]
+
+    start: [5.5, -1.5, 0.0]
+    goal: [5.5, 2.5, 0.0]
+
+    linear_speed: 0.25
+    angular_speed: 1.0
+
+    loggers:
+      - odom
+      - lidar
+      - velocity
+
+  - name: robot3
+    deploy: true
+
+    spawn: [0.0, 7.0, 0.0]
+    maze_spawn: [0.0, 7.0, 0.0]
+
+    start: [-1.5, 5.5, 0.0]
+    goal: [1.5, 5.5, 0.0]
+
+    linear_speed: 0.25
+    angular_speed: 1.0
+
+    loggers:
+      - odom
+      - lidar
+      - velocity
