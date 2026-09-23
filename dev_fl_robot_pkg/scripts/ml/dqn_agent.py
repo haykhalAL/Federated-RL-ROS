@@ -57,6 +57,7 @@ class DQNAgent:
         self.loss_fn = nn.MSELoss()
 
         self.steps = 0
+        self.lr = lr
 
     # -----------------------
     # ACTION SELECTION
@@ -148,6 +149,55 @@ class DQNAgent:
         if self.steps % self.target_update == 0:
             self.update_target()
 
+    def get_model_state_dict(self):
+        """
+        Return a CPU copy of the policy network.
+        """
+
+        return {
+            key: value.detach().cpu().clone()
+            for key, value
+            in self.policy_net.state_dict().items()
+        }
+
+
+    def set_model_state_dict(
+        self,
+        state_dict,
+        reset_optimizer=True
+    ):
+        """
+        Load global model parameters.
+
+        Policy network:
+            replaced by global model
+
+        Target network:
+            synchronized with global model
+
+        Replay buffer:
+            remains local
+
+        Epsilon:
+            remains local
+        """
+
+        self.policy_net.load_state_dict(
+            state_dict
+        )
+
+        self.target_net.load_state_dict(
+            state_dict
+        )
+
+        self.steps = 0
+
+        if reset_optimizer:
+
+            self.optimizer = optim.Adam(
+                self.policy_net.parameters(),
+                lr=self.lr
+            )
     # -----------------------
     # END EPISODE
     # -----------------------

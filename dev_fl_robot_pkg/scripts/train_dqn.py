@@ -15,6 +15,10 @@ import rospkg
 from robot_interface import RobotInterface
 from env.robot_env import RobotEnv
 from ml.dqn_agent import DQNAgent
+from federated import (
+    FedAvgStrategy,
+    FederatedCoordinator
+)
 
 
 # ============================================================
@@ -398,6 +402,55 @@ def train():
         "train_dqn"
     )
 
+    federated_cfg = exp.get(
+        "federated",
+        {}
+    )
+
+    federated_enabled = (
+        federated_cfg.get(
+            "enabled",
+            False
+        )
+    )
+
+    aggregation_cfg = (
+        federated_cfg.get(
+            "aggregation",
+            {}
+        )
+    )
+
+    local_episodes = int(
+        aggregation_cfg.get(
+            "local_episodes",
+            10
+        )
+    )
+
+    communication_rounds = int(
+        aggregation_cfg.get(
+            "communication_rounds",
+            1
+        )
+    )
+
+    # ========================================================
+    # FEDERATED LEARNING
+    # ========================================================
+
+    federated_coordinator = None
+
+    if federated_enabled:
+
+        strategy = FedAvgStrategy()
+
+        federated_coordinator = FederatedCoordinator(
+            strategy=strategy,
+            local_episodes=local_episodes,
+            communication_rounds=communication_rounds,
+            model_dir=config["logging"]["model_dir"]
+        )
     # --------------------------------------------------------
     # Find deployed robots
     # --------------------------------------------------------
@@ -412,6 +465,7 @@ def train():
         "========== INITIALIZING DEPLOYED ROBOTS =========="
     )
 
+    
     # --------------------------------------------------------
     # Initialize each robot
     # --------------------------------------------------------
@@ -464,7 +518,11 @@ def train():
             "episode_steps": 0,
 
             # Total completed episodes
-            "completed_episodes": 0
+            "completed_episodes": 0,
+
+            # Federated state
+            "federated_waiting": False,
+            "round_samples": 0
         })
 
     # --------------------------------------------------------
@@ -484,6 +542,30 @@ def train():
         len(robot_instances)
     )
 
+    # ========================================================
+    # INITIAL GLOBAL MODEL
+    # ========================================================
+
+    if federated_enabled:
+
+        # Take theta_0 from the first initialized robot
+        global_state = (
+            robot_instances[0]["agent"]
+            .get_model_state_dict()
+        )
+
+        # Broadcast the same theta_0 to every robot
+        for item in robot_instances:
+
+            item["agent"].set_model_state_dict(
+                global_state,
+                reset_optimizer=True
+            )
+
+        rospy.loginfo(
+            "[FEDERATED] Initial global model "
+            "theta_0 synchronized across all robots."
+        )
     # --------------------------------------------------------
     # Logging
     # --------------------------------------------------------
@@ -655,6 +737,9 @@ def train():
                     done
                 )
 
+                if federated_enabled:
+                    item["round_samples"] += 1
+
                 item["agent"].learn()
 
                 item["state"] = next_state
@@ -761,10 +846,205 @@ def train():
                 # Other robots do NOT need to be done.
                 # ------------------------------------------------
 
-                if completed < target_episodes:
+                # ========================================================
+                # FEDERATED SYNCHRONIZATION
+                # ========================================================
 
+                if federated_enabled:
+
+                    # ----------------------------------------------------
+                    # Check whether this robot has reached its local
+                    # training quota for the current federated round.
+                    # ----------------------------------------------------
+
+                    round_boundary = (
+                        completed % local_episodes == 0
+                        or completed >= target_episodes
+                    )
+
+                    if round_boundary:
+
+                        # Stop this robot from participating in physical
+                        # simulation until all clients reach the boundary.
+                        item["federated_waiting"] = True
+                        item["done"] = True
+
+                        item["robot"].stop()
+
+                        # ------------------------------------------------
+                        # Submit local model to coordinator
+                        # ------------------------------------------------
+
+                        federated_coordinator.submit_update(
+                            client_id=item["name"],
+                            agent=item["agent"],
+                            num_samples=item["round_samples"]
+                        )
+
+                        rospy.loginfo(
+                            "[FEDERATED] %s waiting for aggregation | "
+                            "completed=%d | samples=%d",
+                            item["name"],
+                            completed,
+                            item["round_samples"]
+                        )
+
+                        log_training(
+                            training_log,
+                            f"[FEDERATED] {item['name']} "
+                            f"waiting for aggregation | "
+                            f"completed={completed} | "
+                            f"samples={item['round_samples']}"
+                        )
+
+                        # ------------------------------------------------
+                        # Do NOT reset the robot yet.
+                        # It waits here until every client submits.
+                        # ------------------------------------------------
+
+                    else:
+
+                        # ------------------------------------------------
+                        # Normal local episode transition.
+                        # No federated synchronization yet.
+                        # ------------------------------------------------
+
+                        next_episode = completed + 1
+
+                        state = reset_robot_episode(
+                            item,
+                            next_episode
+                        )
+
+                        if state is None:
+
+                            rospy.logerr(
+                                "%s reset failed after episode %d",
+                                item["name"],
+                                completed
+                            )
+
+                            log_training(
+                                training_log,
+                                f"[RESET FAILED] "
+                                f"{item['name']} "
+                                f"episode={next_episode}"
+                            )
+
+                            rospy.signal_shutdown(
+                                "Robot reset failed"
+                            )
+
+                            break
+
+                        log_training(
+                            training_log,
+                            f"[RESET] "
+                            f"{item['name']} "
+                            f"episode={next_episode}"
+                        )
+
+                else:
+
+                    # ====================================================
+                    # NON-FEDERATED MODE
+                    # Preserve original behavior.
+                    # ====================================================
+
+                    if completed < target_episodes:
+
+                        next_episode = completed + 1
+
+                        state = reset_robot_episode(
+                            item,
+                            next_episode
+                        )
+
+                        if state is None:
+
+                            rospy.logerr(
+                                "%s reset failed after episode %d",
+                                item["name"],
+                                completed
+                            )
+
+                            log_training(
+                                training_log,
+                                f"[RESET FAILED] "
+                                f"{item['name']} "
+                                f"episode={next_episode}"
+                            )
+
+                            rospy.signal_shutdown(
+                                "Robot reset failed"
+                            )
+
+                            break
+
+                        log_training(
+                            training_log,
+                            f"[RESET] "
+                            f"{item['name']} "
+                            f"episode={next_episode}"
+                        )
+
+        # ========================================================
+        # FEDERATED AGGREGATION
+        # ========================================================
+
+        if federated_enabled:
+
+            client_ids = [
+                item["name"]
+                for item in robot_instances
+            ]
+
+            all_clients_ready = (
+                federated_coordinator
+                .all_clients_ready(client_ids)
+            )
+
+            if all_clients_ready:
+
+                result = federated_coordinator.aggregate(
+                    {
+                        item["name"]: item["agent"]
+                        for item in robot_instances
+                    }
+                )
+
+                round_number = result["round"]
+
+                rospy.loginfo(
+                    "[FEDERATED] Round %d aggregated.",
+                    round_number
+                )
+
+                log_training(
+                    training_log,
+                    f"[FEDERATED] Round {round_number} "
+                    f"aggregated."
+                )
+
+                # ------------------------------------------------
+                # Reset per-round counters and release robots
+                # ------------------------------------------------
+
+                for item in robot_instances:
+
+                    item["round_samples"] = 0
+                    item["federated_waiting"] = False
+
+                    # Robot has already reached the total target.
+                    if item["completed_episodes"] >= target_episodes:
+
+                        item["done"] = True
+                        continue
+
+                    # Start next local episode from the new
+                    # globally aggregated model.
                     next_episode = (
-                        completed + 1
+                        item["completed_episodes"] + 1
                     )
 
                     state = reset_robot_episode(
@@ -775,32 +1055,33 @@ def train():
                     if state is None:
 
                         rospy.logerr(
-                            "%s reset failed "
-                            "after episode %d",
+                            "%s reset failed after "
+                            "federated round %d",
                             item["name"],
-                            completed
+                            round_number
                         )
 
                         log_training(
                             training_log,
                             f"[RESET FAILED] "
                             f"{item['name']} "
-                            f"episode={next_episode}"
+                            f"after federated round "
+                            f"{round_number}"
                         )
 
                         rospy.signal_shutdown(
-                            "Robot reset failed"
+                            "Robot reset failed "
+                            "after federated aggregation"
                         )
 
                         break
 
                     log_training(
                         training_log,
-                        f"[RESET] "
+                        f"[FEDERATED RESET] "
                         f"{item['name']} "
                         f"episode={next_episode}"
                     )
-
     # ========================================================
     # CLEANUP
     # ========================================================

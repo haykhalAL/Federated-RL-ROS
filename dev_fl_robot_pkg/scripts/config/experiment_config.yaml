@@ -7,7 +7,7 @@ experiment:
   #seed 42 for testing it can learn 1 block movement
 
   training:
-    episodes: 1000
+    episodes: 200
     max_steps: 500
     step_dt: 0.25
 
